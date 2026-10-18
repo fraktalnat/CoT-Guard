@@ -1,0 +1,12 @@
+# Experiment 2b: does the problem text alone (no CoT) separate unrequested from requested prompts?
+# Reuses Experiment 2's sampled attacks and paraphrases (analysis/configs/overlap_baseline.yaml).
+overlap_config: analysis/configs/overlap_baseline.yaml
+out_dir: analysis/outputs/leakage_check
+seed: 0
+
+classifier:
+  n_folds: 5          # cross-validation folds, grouped by problem so one problem's text never sits in train and test
+  nb_alpha: 1.0       # Laplace smoothing for the bag-of-words naive Bayes
+
+thresholds:
+  leak_auroc: 0.60    # a prompt-only classifier at or above this means the pair design leaks the label
