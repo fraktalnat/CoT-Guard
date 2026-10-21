@@ -5,9 +5,7 @@
 import os
 from pathlib import Path
 
-GLOBAL_DIRECTORY = os.environ.get(
-    "COT_GLOBAL_DIRECTORY", "/srv/local/hanw14/neurips26/"
-)
+GLOBAL_DIRECTORY = os.environ.get("COT_GLOBAL_DIRECTORY", "/Users/gisi/cot-download")
 
 TEMP_DIRECTORY = Path(os.environ.get("COT_TEMP_DIRECTORY", Path.cwd()))
 

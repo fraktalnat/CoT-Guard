@@ -1,0 +1,14 @@
+# Phase 1: benign monitor inputs for TNR (analysis/phase1_benign_set.py). Read-only over the downloaded data.
+# Writes <out_root>/datasets/monitor/<main_task>.<benign_name>.no_side_task/<generator>--<attack_rollouts>/main-all.<monitor_policy>.<monitor_type>.jsonl
+# On the GPU box: copy <out_root>/datasets into $COT_GLOBAL_DIRECTORY, then run gen/monitor.py with
+#   --side_task=<benign_name> --attack_policy=no_side_task --attack_rollouts=<attack_rollouts> --filter_mode=main-all
+monitor_inputs_root: ~/cot-download/datasets/monitor
+task_id_sets: src/cot_red_handed/tasks/data/task_id_sets.json
+id_set: TLS              # the full set; the pilot reuses the same benign file
+main_task: bigcodebench
+generator: Qwen3-14B
+monitor_policy: main_aware
+monitor_type: cot_action
+benign_name: tls_benign
+attack_rollouts: 5       # folder label only; the records come from the --5 and --20 folders
+out_root: analysis/outputs/phase1_benign

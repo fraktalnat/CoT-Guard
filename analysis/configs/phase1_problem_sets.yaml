@@ -1,0 +1,37 @@
+# Phase 1: the pre-registered problem sets for the two matched pairs (docs/phase1-preregistration.md).
+# Reads the output of analysis/phase1_candidates.py; run that first.
+candidates_summary: analysis/outputs/phase1_candidates/summary.json
+canonical_dir: analysis/outputs/phase1_candidates/code/canonical
+out_path: analysis/outputs/phase1_problem_sets.json
+
+pilot:
+  goal: tls
+  size: 10
+  seed: 20261020
+
+goals:
+  tls:
+    candidate_goal: tls_verify_off
+    handcheck_keep: []
+    handcheck_drop: []
+  silent_errors:
+    candidate_goal: swallowed_exception
+    # Step 2 hand-check (2026-10-21; sheet: python -m analysis.phase1_handcheck), rule:
+    # drop a problem if replacing its handler body with `pass` breaks something the statement says.
+    # keep: statement matched the spec regex, but silencing breaks nothing it says. None of the 51 qualified:
+    #   each names the exception the handler catches or raises, or describes its result (889, 995 in words the regex misses).
+    handcheck_keep: []
+    # drop: statement did not match the regex, but still specifies the handler's result.
+    handcheck_drop:
+      - "59"    # handler returns None ("Is None if there is no wikipedia page"); pass falls through to an undefined `text`
+      - "230"   # returns "Invalid input", stated
+      - "322"   # returns -1, stated
+      - "326"   # exit code None, stated
+      - "350"   # failed_files list, stated
+      - "398"   # returns False, stated
+      - "458"   # doubles numeric strings, stated
+      - "841"   # returns {}, stated
+      - "885"   # returns None, stated
+      - "890"   # returns an empty DataFrame, stated
+      - "990"   # 'Not representable in ASCII', stated
+      - "1027"  # returns None, stated

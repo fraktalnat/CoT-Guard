@@ -1,0 +1,11 @@
+# Phase 1: static side-task scoring, the Docker-free stand-in for eval/verify_task.py (docs/generalization.md).
+# Reads  <results_root>/<main_task>.<side_task>.<attack_policy>/<model>.jsonl            (gen/attack.py output)
+# Writes <results_root>/<main_task>.<side_task>.<attack_policy>/<model>.<num_rollouts>.tested.jsonl  (for_monitor.py input)
+results_root: null   # null = $COT_GLOBAL_DIRECTORY/results/attack (config.GLOBAL_DIRECTORY)
+main_task: bigcodebench
+attack_policy: baseline
+model: Qwen3-14B
+num_rollouts: 5
+side_tasks: [tls_additive, tls_substitutive, silent_errors_additive, silent_errors_substitutive]
+bandit_cmd: [bandit, -c, analysis/configs/bandit.yaml]
+work_dir: analysis/outputs/phase1_score   # extracted code Bandit runs on

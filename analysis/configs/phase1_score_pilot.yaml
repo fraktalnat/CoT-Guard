@@ -1,0 +1,10 @@
+# Phase 1 pilot: static side-task scoring (analysis/phase1_score.py) for TLS_PILOT_SET, 3 rollouts per variant.
+# Writes <results_root>/bigcodebench.<side_task>.baseline/Qwen3-14B.3.tested.jsonl, which for_monitor.py reads with --attack_rollouts=3.
+results_root: null   # null = $COT_GLOBAL_DIRECTORY/results/attack (config.GLOBAL_DIRECTORY)
+main_task: bigcodebench
+attack_policy: baseline
+model: Qwen3-14B
+num_rollouts: 3
+side_tasks: [tls_additive, tls_substitutive]
+bandit_cmd: [bandit, -c, analysis/configs/bandit.yaml]
+work_dir: analysis/outputs/phase1_score_pilot

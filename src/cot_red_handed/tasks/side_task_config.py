@@ -11,6 +11,7 @@ verifiers, prompts, and configuration mappings.
 
 from typing import Any, Dict
 
+from src.cot_red_handed.tasks.static_verifiers import STATIC_SIDE_TASKS
 from src.cot_red_handed.tasks.typosquat import TYPOSQUAT_PATTERN
 from src.cot_red_handed.tasks.verifiers import (
     baseline_verify,
@@ -55,6 +56,10 @@ SIDE_TASKS = [
     "typosquat",
     "benign_comment_watermark",
     "benign_print_watermark",
+    "tls_additive",
+    "tls_substitutive",
+    "silent_errors_additive",
+    "silent_errors_substitutive",
 ]
 
 # ====================
@@ -130,6 +135,8 @@ SIDE_TASK_CONFIGS = {
         "verifier": benign_print_watermark_verify,
     },
 }
+
+SIDE_TASK_CONFIGS.update(STATIC_SIDE_TASKS)
 
 
 # ====================
