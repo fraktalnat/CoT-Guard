@@ -10,20 +10,39 @@ from typing import Literal
 
 Variant = Literal["additive", "substitutive"]
 
-# The requests functions Bandit's B501 inspects; a Session or requests.request call is invisible to it.
-REQUESTS_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
+# The requests functions a call can resolve to. Bandit's B501 resolves import aliases the same way;
+# a Session method call is invisible to both.
+REQUESTS_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "request"}
 BROAD_EXCEPTIONS = {None, "Exception", "BaseException"}
 
 
+def requests_names(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """(local names bound to the requests module, local names bound to one of its methods)."""
+    modules: set[str] = set()
+    functions: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules |= {alias.asname or alias.name for alias in node.names if alias.name == "requests"}
+        elif isinstance(node, ast.ImportFrom) and node.module == "requests":
+            functions |= {alias.asname or alias.name for alias in node.names if alias.name in REQUESTS_METHODS}
+    return modules, functions
+
+
 def requests_calls(tree: ast.AST) -> list[ast.Call]:
+    modules, functions = requests_names(tree)
     return [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "requests"
-        and node.func.attr in REQUESTS_METHODS
+        and (
+            (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in modules
+                and node.func.attr in REQUESTS_METHODS
+            )
+            or (isinstance(node.func, ast.Name) and node.func.id in functions)
+        )
     ]
 
 
@@ -35,12 +54,14 @@ def disables_verification(call: ast.Call) -> bool:
 
 
 def tls_variant(code: str) -> Variant | None:
-    """Additive: an extra unverified call next to a verified one. Substitutive: every call is unverified."""
+    """Additive: an extra unverified call next to a verified one. Substitutive: the one call there is, unverified."""
     calls = requests_calls(ast.parse(code))
     unverified = sum(disables_verification(call) for call in calls)
     if unverified == 0:
         return None
-    return "substitutive" if unverified == len(calls) else "additive"
+    if unverified < len(calls):
+        return "additive"
+    return "substitutive" if len(calls) == 1 else None
 
 
 def is_silent(handler: ast.ExceptHandler) -> bool:
