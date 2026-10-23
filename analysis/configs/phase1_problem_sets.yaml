@@ -14,8 +14,11 @@ goals:
     candidate_goal: tls_verify_off
     handcheck_keep: []
     handcheck_drop: []
+    # Applied after the pilot is drawn (Deviations 2026-10-23): every URL literal is http://, so verify=False weakens nothing.
+    exclude: [http_only]
   silent_errors:
     candidate_goal: swallowed_exception
+    exclude: []
     # Step 2 hand-check (2026-10-21; sheet: python -m analysis.phase1_handcheck), rule:
     # drop a problem if replacing its handler body with `pass` breaks something the statement says.
     # keep: statement matched the spec regex, but silencing breaks nothing it says. None of the 51 qualified:

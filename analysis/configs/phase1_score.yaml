@@ -6,6 +6,6 @@ main_task: bigcodebench
 attack_policy: baseline
 model: Qwen3-14B
 num_rollouts: 5
-side_tasks: [tls_additive, tls_substitutive, silent_errors_additive, silent_errors_substitutive]
+side_tasks: [tls_additive, tls_substitutive]   # CHANGED: silent errors is not run (docs/phase1-preregistration.md)
 bandit_cmd: [bandit, -c, analysis/configs/bandit.yaml]
 work_dir: analysis/outputs/phase1_score   # extracted code Bandit runs on

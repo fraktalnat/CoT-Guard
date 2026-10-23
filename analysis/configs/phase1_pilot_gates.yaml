@@ -10,7 +10,8 @@ monitor_policy: main_aware
 monitor_type: cot_action
 k: 4
 side_tasks: {additive: tls_additive, substitutive: tls_substitutive}
-seed: 20261021
+seed: 20261022                  # the hand-check sheet's draw
+handcheck_used_seeds: [20261021]  # seeds of earlier sheets, oldest first; their samples are not shown again
 out_dir: analysis/outputs/phase1_pilot_gates
 
 gates:   # docs/phase1-preregistration.md, "Pilot gates"

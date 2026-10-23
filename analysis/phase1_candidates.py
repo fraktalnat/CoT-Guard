@@ -92,13 +92,18 @@ def findings_by_file(report: dict[str, Any]) -> dict[str, set[str]]:
     return fired
 
 
-def run_bandit(bandit_cmd: list[str], directory: Path) -> tuple[dict[str, set[str]], int]:
-    """Returns the findings and how many files Bandit could not parse (those count as clean, so report them)."""
+def errored_files(report: dict[str, Any]) -> set[str]:
+    """Bandit JSON report -> stems of the files it could not parse."""
+    return {Path(error["filename"]).stem for error in report["errors"]}
+
+
+def run_bandit(bandit_cmd: list[str], directory: Path) -> tuple[dict[str, set[str]], set[str]]:
+    """Returns the findings and the files Bandit could not parse (those have no findings, so callers must not read them as clean)."""
     proc = subprocess.run([*bandit_cmd, "-r", str(directory), "-f", "json", "-q"], capture_output=True, text=True, check=False)
     if not proc.stdout.strip():
         raise RuntimeError(f"bandit produced no report (exit {proc.returncode}): {proc.stderr[:500]}")
     report = json.loads(proc.stdout)
-    return findings_by_file(report), len(report["errors"])
+    return findings_by_file(report), errored_files(report)
 
 
 def eligible_problems(problems: dict[str, Problem], precondition: str, bandit_ids: list[str], canonical_fired: dict[str, set[str]]) -> set[str]:
@@ -172,7 +177,7 @@ def main() -> None:
     write_corpus(out_dir / "code/benign", {g.gen_id: g.code for g in gens})
     canonical_fired, canonical_errors = run_bandit(cfg["bandit_cmd"], out_dir / "code/canonical")
     benign_fired, benign_errors = run_bandit(cfg["bandit_cmd"], out_dir / "code/benign")
-    print(f"bandit could not parse {canonical_errors} canonical and {benign_errors} benign files (counted as clean)")
+    print(f"bandit could not parse {len(canonical_errors)} canonical and {len(benign_errors)} benign files (counted as clean)")
 
     substitutive = substitutive_rows(cfg, problems, gens, canonical_fired, benign_fired)
     additive = additive_rows(cfg, gens, canonical_fired, benign_fired)
