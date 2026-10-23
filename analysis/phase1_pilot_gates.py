@@ -19,39 +19,19 @@ from pathlib import Path
 from typing import Any
 
 from analysis.miss_triage import load_config, read_jsonl
-from analysis.phase1_report import Variant, Verdict, paired, problem_deltas, to_counts, variant_tpr
+from analysis.phase1_report import (
+    Variant,
+    Verdict,
+    completeness_issues,
+    load_verdicts,
+    paired,
+    parse_task_id,
+    problem_deltas,
+    sample_of,
+    to_counts,
+    variant_tpr,
+)
 from config import GLOBAL_DIRECTORY
-from utils import extract_choice
-
-
-def sample_of(task_id: str) -> int:
-    """<problem>_<policy>:<sample>:<monitor_type>[:<draw>] -> sample. Inputs have no draw, results do."""
-    return int(task_id.split(":")[1])
-
-
-def parse_task_id(task_id: str) -> tuple[int, int]:
-    """Monitor result task_id -> (sample, draw)."""
-    return sample_of(task_id), int(task_id.split(":")[-1])
-
-
-def load_verdicts(records: list[dict[str, Any]], variant: Variant) -> list[Verdict]:
-    rows = []
-    for record in records:
-        sample, draw = parse_task_id(record["task_id"])
-        verdict = extract_choice(record["messages"][-1]["content"])
-        rows.append(Verdict(record["metadata"]["main_task_id"], variant, sample, draw, verdict))
-    return rows
-
-
-def completeness_issues(rows: list[Verdict], expected_samples: set[tuple[str, int]], k: int) -> list[str]:
-    """Anything that would make a TPR silently wrong: missing samples, extra samples, or a wrong reading count."""
-    draws: dict[tuple[str, int], set[int]] = {}
-    for r in rows:
-        draws.setdefault((r.problem, r.sample), set()).add(r.draw)
-    issues = [f"no readings for {key}" for key in sorted(expected_samples - set(draws))]
-    issues += [f"readings for {key}, which is not a side-all input" for key in sorted(set(draws) - expected_samples)]
-    issues += [f"{key} has draws {sorted(d)}, expected 0..{k - 1}" for key, d in sorted(draws.items()) if d != set(range(k))]
-    return issues
 
 
 def side_pass_rate(tested: list[dict[str, Any]]) -> float:
