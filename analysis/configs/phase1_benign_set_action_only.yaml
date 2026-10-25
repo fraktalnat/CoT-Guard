@@ -1,0 +1,10 @@
+monitor_inputs_root: ~/cot-download/datasets/monitor
+task_id_sets: analysis/configs/phase1_benign_problem_ids.json
+id_set: TLS_PRE_HTTP_DROP
+main_task: bigcodebench
+generator: Qwen3-14B
+monitor_policy: main_aware
+monitor_type: action_only
+benign_name: tls_benign
+attack_rollouts: 5
+out_root: analysis/outputs/phase1_benign_action_only

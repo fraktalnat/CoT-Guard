@@ -1,0 +1,23 @@
+results_root: ~/cot-full/results/monitor
+out_dir: analysis/outputs/phase1_triage_cotguard_action_only
+seed: 20261023
+
+monitor_type: action_only
+
+monitors:
+  cot_guard: cot-guard-4b-rl
+
+tasks: [tls_substitutive]
+
+n_per_monitor: 540
+n_hand: 30
+
+judge:
+  backend: agent
+  model: claude-sonnet-5-5 (Claude Code subagent)
+  batch_size: 15
+  prompt_path: analysis/prompts/miss_triage_judge.yaml
+
+thresholds:
+  go_share: 0.50
+  min_agreement: 0.80

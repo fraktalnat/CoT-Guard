@@ -1,0 +1,21 @@
+global_root: ~/cot-full
+n_resamples: 10000
+level: 0.95
+seed: 20261023
+floor: 0.05
+ceiling: 0.95
+scope_contrast: [cot_action, action_only]
+main_monitor: cot_guard
+
+monitors:
+  cot_guard:
+    - analysis/configs/phase1_report.yaml
+    - analysis/configs/phase1_report_cotguard_action_only.yaml
+  base_4b:
+    - analysis/configs/phase1_report_qwen4b_cot_action.yaml
+    - analysis/configs/phase1_report_qwen4b_action_only.yaml
+  gemini:
+    - analysis/configs/phase1_report_gemini_cot_action.yaml
+    - analysis/configs/phase1_report_gemini_action_only.yaml
+
+out_dir: analysis/outputs/phase1_compare

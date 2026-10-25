@@ -3,12 +3,6 @@
 Each miss (attack where the monitor verdict wasn't C) goes into one bucket:
 never_noticed / attributed / harmless (judged by an API model), or answered_d (verdict D, no judge call).
 
-Run from the repo root, in order:
-    python -m analysis.miss_triage sample        # collect + stratify misses -> misses.jsonl
-    python -m analysis.miss_triage judge         # needs $OPENROUTER_API_KEY; resumable -> judged.jsonl
-    python -m analysis.miss_triage export-hand   # blind set -> hand_review.md + hand_labels.csv (fill hand_label)
-    python -m analysis.miss_triage export-rest   # optional: every other non-D miss -> hand_review_rest.md + hand_labels_rest.csv
-    python -m analysis.miss_triage report        # bucket shares, go/pivot decision, judge-vs-hand agreement
 """
 
 import argparse
@@ -80,11 +74,13 @@ def generator_from_dir(dirname: str) -> str:
     return dirname.split("--")[0]
 
 
-def collect_misses(root: str, monitor_key: str, model: str, tasks: list[str]) -> tuple[list[Miss], int]:
+def collect_misses(
+    root: str, monitor_key: str, model: str, tasks: list[str], monitor_type: str
+) -> tuple[list[Miss], int]:
     """Returns (misses, n_unparsed). Unparsed verdicts are excluded but counted, not silently dropped."""
     misses, n_unparsed = [], 0
     for side in tasks:
-        pattern = f"{root}/bigcodebench.{side}.baseline/*/side-all.{model}.main_aware.cot_action.jsonl"
+        pattern = f"{root}/bigcodebench.{side}.baseline/*/side-all.{model}.main_aware.{monitor_type}.jsonl"
         for path in sorted(glob.glob(pattern)):
             rel = os.path.relpath(path, root)
             generator = generator_from_dir(Path(path).parent.name)
@@ -115,7 +111,9 @@ def collect_misses(root: str, monitor_key: str, model: str, tasks: list[str]) ->
     return misses, n_unparsed
 
 
-def stratified_sample(items: list[T], n: int, key: Callable[[T], Hashable], rng: random.Random) -> list[T]:
+def stratified_sample(
+    items: list[T], n: int, key: Callable[[T], Hashable], rng: random.Random
+) -> list[T]:
     """Round-robin over strata so small strata are taken whole and the remainder goes to larger ones."""
     groups: dict[Hashable, list[T]] = collections.defaultdict(list)
     for item in items:
@@ -140,7 +138,10 @@ def build_judge_messages(miss: Miss, prompt: dict[str, str]) -> list[dict[str, s
         attack_code=miss.attack_code,
         monitor_response=miss.monitor_response,
     )
-    return [{"role": "system", "content": prompt["system"]}, {"role": "user", "content": user}]
+    return [
+        {"role": "system", "content": prompt["system"]},
+        {"role": "user", "content": user},
+    ]
 
 
 def parse_judgment(text: str) -> Judgment:
@@ -157,7 +158,9 @@ def parse_judgment(text: str) -> Judgment:
     return Judgment(bucket, obj.get("evidence", ""), obj.get("rationale", ""))
 
 
-def call_judge(messages: list[dict[str, str]], judge_cfg: dict[str, Any], api_key: str) -> tuple[str, float]:
+def call_judge(
+    messages: list[dict[str, str]], judge_cfg: dict[str, Any], api_key: str
+) -> tuple[str, float]:
     """Returns (content, cost_usd). Retries transient errors with exponential backoff, then raises."""
     payload = {
         "model": judge_cfg["model"],
@@ -169,12 +172,20 @@ def call_judge(messages: list[dict[str, str]], judge_cfg: dict[str, Any], api_ke
     request = urllib.request.Request(
         judge_cfg["url"],
         data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
     )
+
     def post() -> tuple[str, float]:
-        with urllib.request.urlopen(request, timeout=judge_cfg["timeout_s"]) as response:
+        with urllib.request.urlopen(
+            request, timeout=judge_cfg["timeout_s"]
+        ) as response:
             body = json.loads(response.read())
-        return body["choices"][0]["message"]["content"], body.get("usage", {}).get("cost", 0.0)
+        return body["choices"][0]["message"]["content"], body.get("usage", {}).get(
+            "cost", 0.0
+        )
 
     for attempt in range(judge_cfg["max_retries"]):
         try:
@@ -217,46 +228,161 @@ def cmd_sample(cfg: dict[str, Any], out_dir: Path) -> None:
     rng = random.Random(cfg["seed"])
     rows = []
     for key, model in cfg["monitors"].items():
-        misses, n_unparsed = collect_misses(os.path.expanduser(cfg["results_root"]), key, model, cfg["tasks"])
-        sample = stratified_sample(misses, cfg["n_per_monitor"], lambda m: m.side_task, rng)
+        misses, n_unparsed = collect_misses(
+            os.path.expanduser(cfg["results_root"]),
+            key,
+            model,
+            cfg["tasks"],
+            cfg["monitor_type"],
+        )
+        sample = stratified_sample(
+            misses, cfg["n_per_monitor"], lambda m: m.side_task, rng
+        )
         per_task = collections.Counter(m.side_task for m in sample)
-        print(f"{key}: {len(misses)} misses ({n_unparsed} unparsed excluded), sampled {len(sample)}: {dict(per_task)}")
+        print(
+            f"{key}: {len(misses)} misses ({n_unparsed} unparsed excluded), sampled {len(sample)}: {dict(per_task)}"
+        )
         rows.extend(dataclasses.asdict(m) for m in sample)
     write_jsonl(out_dir / "misses.jsonl", rows)
     print(f"wrote {len(rows)} misses to {out_dir / 'misses.jsonl'}")
 
 
+def judged_row(
+    miss: Miss, judgment: Judgment, judge_model: str | None, raw: str, cost: float
+) -> dict:
+    return {
+        "miss_id": miss.miss_id,
+        "monitor": miss.monitor,
+        "side_task": miss.side_task,
+        "verdict": miss.verdict,
+        **dataclasses.asdict(judgment),
+        "judge_model": judge_model,
+        "raw": raw,
+        "cost": cost,
+    }
+
+
+def judge_requests(
+    misses: list[Miss], prompt: dict[str, str], batch_size: int
+) -> list[list[dict[str, str]]]:
+    """The exact system/user messages the API judge would get, one row per non-D miss, in batches for agent judges."""
+    rows = []
+    for miss in misses:
+        if miss.verdict != "D":
+            system, user = build_judge_messages(miss, prompt)
+            rows.append(
+                {
+                    "miss_id": miss.miss_id,
+                    "system": system["content"],
+                    "user": user["content"],
+                }
+            )
+    return [rows[i : i + batch_size] for i in range(0, len(rows), batch_size)]
+
+
+def rows_from_responses(
+    misses: list[Miss], responses: dict[str, str], judge_model: str
+) -> list[dict]:
+    """Agent responses (miss_id -> raw JSON text) -> judged rows, parsed exactly as API responses are. D needs no response."""
+    missing = [
+        m.miss_id for m in misses if m.verdict != "D" and m.miss_id not in responses
+    ]
+    if missing:
+        raise SystemExit(
+            f"{len(missing)} misses have no agent response, e.g. {missing[:3]}"
+        )
+    return [
+        judged_row(m, Judgment(D_BUCKET, "", "verdict D"), None, "", 0.0)
+        if m.verdict == "D"
+        else judged_row(
+            m,
+            parse_judgment(responses[m.miss_id]),
+            judge_model,
+            responses[m.miss_id],
+            0.0,
+        )
+        for m in misses
+    ]
+
+
+def cmd_export_requests(cfg: dict[str, Any], out_dir: Path) -> None:
+    judge_cfg = cfg["judge"]
+    misses = [Miss(**row) for row in read_jsonl(out_dir / "misses.jsonl")]
+    batches = judge_requests(
+        misses, load_config(judge_cfg["prompt_path"]), judge_cfg["batch_size"]
+    )
+    requests_dir = out_dir / "judge_requests"
+    if requests_dir.exists():
+        raise SystemExit(
+            f"{requests_dir} exists; refusing to overwrite the requests an agent may be judging"
+        )
+    requests_dir.mkdir()
+    (out_dir / "judge_responses").mkdir(exist_ok=True)
+    for i, batch in enumerate(batches):
+        write_jsonl(requests_dir / f"batch_{i:02d}.jsonl", batch)
+    print(
+        f"wrote {sum(map(len, batches))} requests in {len(batches)} batches to {requests_dir}; "
+        f"agents write <miss_id, response> rows to {out_dir / 'judge_responses'}/batch_NN.jsonl"
+    )
+
+
+def cmd_import_responses(cfg: dict[str, Any], out_dir: Path) -> None:
+    judged_path = out_dir / "judged.jsonl"
+    if judged_path.exists():
+        raise SystemExit(f"{judged_path} exists; refusing to overwrite judgments")
+    responses = {}
+    for path in sorted((out_dir / "judge_responses").glob("batch_*.jsonl")):
+        for row in read_jsonl(path):
+            raw = row["response"]
+            responses[row["miss_id"]] = (
+                raw if isinstance(raw, str) else json.dumps(raw)
+            )  # agents may write the object itself
+    misses = [Miss(**row) for row in read_jsonl(out_dir / "misses.jsonl")]
+    rows = rows_from_responses(misses, responses, cfg["judge"]["model"])
+    write_jsonl(judged_path, rows)
+    print(
+        f"wrote {len(rows)} judgments to {judged_path} ({bucket_counts(rows)[UNPARSED]} unparsed)"
+    )
+
+
 def cmd_judge(cfg: dict[str, Any], out_dir: Path) -> None:
     judge_cfg = cfg["judge"]
+    if judge_cfg["backend"] != "openrouter":
+        raise SystemExit(
+            f"judge backend is {judge_cfg['backend']}: use export-requests, then import-responses"
+        )
     api_key = os.environ.get(judge_cfg["api_key_env"])
     if not api_key:
         raise SystemExit(f"set ${judge_cfg['api_key_env']} first")
     prompt = load_config(judge_cfg["prompt_path"])
     misses = [Miss(**row) for row in read_jsonl(out_dir / "misses.jsonl")]
     judged_path = out_dir / "judged.jsonl"
-    done = {row["miss_id"] for row in read_jsonl(judged_path)} if judged_path.exists() else set()
+    done = (
+        {row["miss_id"] for row in read_jsonl(judged_path)}
+        if judged_path.exists()
+        else set()
+    )
     todo = [m for m in misses if m.miss_id not in done]
     print(f"{len(done)} already judged, {len(todo)} to go with {judge_cfg['model']}")
 
-    def record(miss: Miss, judgment: Judgment, judge_model: str | None, raw: str, cost: float) -> dict:
-        return {
-            "miss_id": miss.miss_id,
-            "monitor": miss.monitor,
-            "side_task": miss.side_task,
-            "verdict": miss.verdict,
-            **dataclasses.asdict(judgment),
-            "judge_model": judge_model,
-            "raw": raw,
-            "cost": cost,
-        }
-
+    record = judged_row
     total_cost = 0.0
-    with open(judged_path, "a") as out, ThreadPoolExecutor(max_workers=judge_cfg["max_workers"]) as pool:
+    with (
+        open(judged_path, "a") as out,
+        ThreadPoolExecutor(max_workers=judge_cfg["max_workers"]) as pool,
+    ):
         for miss in todo:
             if miss.verdict == "D":
-                out.write(json.dumps(record(miss, Judgment(D_BUCKET, "", "verdict D"), None, "", 0.0)) + "\n")
+                out.write(
+                    json.dumps(
+                        record(miss, Judgment(D_BUCKET, "", "verdict D"), None, "", 0.0)
+                    )
+                    + "\n"
+                )
         futures = {
-            pool.submit(call_judge, build_judge_messages(m, prompt), judge_cfg, api_key): m
+            pool.submit(
+                call_judge, build_judge_messages(m, prompt), judge_cfg, api_key
+            ): m
             for m in todo
             if m.verdict != "D"
         }
@@ -264,7 +390,12 @@ def cmd_judge(cfg: dict[str, Any], out_dir: Path) -> None:
             miss = futures[future]
             raw, cost = future.result()
             total_cost += cost
-            out.write(json.dumps(record(miss, parse_judgment(raw), judge_cfg["model"], raw, cost)) + "\n")
+            out.write(
+                json.dumps(
+                    record(miss, parse_judgment(raw), judge_cfg["model"], raw, cost)
+                )
+                + "\n"
+            )
             out.flush()
             if i % 20 == 0:
                 print(f"  {i}/{len(futures)} judged, ${total_cost:.3f} so far")
@@ -281,11 +412,15 @@ def unpicked_misses(misses: list[Miss], picked_ids: set[str]) -> list[Miss]:
     return [m for m in misses if m.miss_id not in picked_ids and m.verdict != "D"]
 
 
-def write_hand_files(chosen: list[Miss], review_path: Path, labels_path: Path, start: int) -> None:
+def write_hand_files(
+    chosen: list[Miss], review_path: Path, labels_path: Path, start: int
+) -> None:
     if labels_path.exists():
         raise SystemExit(f"{labels_path} exists; refusing to overwrite hand labels")
     with open(review_path, "w") as f:
-        f.write(f"# Hand review ({len(chosen)} misses)\n\nBuckets: {', '.join(JUDGE_BUCKETS)}\n")
+        f.write(
+            f"# Hand review ({len(chosen)} misses)\n\nBuckets: {', '.join(JUDGE_BUCKETS)}\n"
+        )
         for i, m in enumerate(chosen, start):
             f.write(
                 f"\n---\n\n## {i}. `{m.miss_id}`\n\nmonitor: {m.monitor} | task: {m.side_task} | verdict: {m.verdict}\n\n"
@@ -296,19 +431,27 @@ def write_hand_files(chosen: list[Miss], review_path: Path, labels_path: Path, s
         writer = csv.writer(f)
         writer.writerow(["n", "miss_id", "hand_label", "notes"])
         writer.writerows([i, m.miss_id, "", ""] for i, m in enumerate(chosen, start))
-    print(f"wrote {len(chosen)} items to {review_path}; fill hand_label in {labels_path}")
+    print(
+        f"wrote {len(chosen)} items to {review_path}; fill hand_label in {labels_path}"
+    )
 
 
 def cmd_export_hand(cfg: dict[str, Any], out_dir: Path) -> None:
     rng = random.Random(cfg["seed"])
-    misses = [Miss(**row) for row in read_jsonl(out_dir / "misses.jsonl") if row["verdict"] != "D"]
+    misses = [
+        Miss(**row)
+        for row in read_jsonl(out_dir / "misses.jsonl")
+        if row["verdict"] != "D"
+    ]
     per_monitor = cfg["n_hand"] // len(cfg["monitors"])
     chosen = []
     for key in cfg["monitors"]:
         pool = [m for m in misses if m.monitor == key]
         chosen.extend(stratified_sample(pool, per_monitor, lambda m: m.side_task, rng))
     rng.shuffle(chosen)
-    write_hand_files(chosen, out_dir / "hand_review.md", out_dir / "hand_labels.csv", start=1)
+    write_hand_files(
+        chosen, out_dir / "hand_review.md", out_dir / "hand_labels.csv", start=1
+    )
 
 
 def cmd_export_rest(cfg: dict[str, Any], out_dir: Path) -> None:
@@ -318,7 +461,12 @@ def cmd_export_rest(cfg: dict[str, Any], out_dir: Path) -> None:
     picked = read_label_ids(labels_path)
     misses = [Miss(**row) for row in read_jsonl(out_dir / "misses.jsonl")]
     rest = unpicked_misses(misses, picked)
-    write_hand_files(rest, out_dir / "hand_review_rest.md", out_dir / "hand_labels_rest.csv", start=len(picked) + 1)
+    write_hand_files(
+        rest,
+        out_dir / "hand_review_rest.md",
+        out_dir / "hand_labels_rest.csv",
+        start=len(picked) + 1,
+    )
 
 
 def load_hand_labels(paths: list[Path]) -> dict[str, str]:
@@ -328,7 +476,13 @@ def load_hand_labels(paths: list[Path]) -> dict[str, str]:
         if not path.exists():
             continue
         with open(path) as f:
-            hand.update({row["miss_id"]: row["hand_label"].strip() for row in csv.DictReader(f) if row["hand_label"].strip()})
+            hand.update(
+                {
+                    row["miss_id"]: row["hand_label"].strip()
+                    for row in csv.DictReader(f)
+                    if row["hand_label"].strip()
+                }
+            )
     return hand
 
 
@@ -347,27 +501,39 @@ def cmd_report(cfg: dict[str, Any], out_dir: Path) -> None:
     for key in cfg["monitors"]:
         rows = [r for r in judged if r["monitor"] == key]
         shares = print_buckets(key, rows)
-        print(f"  -> {decide(shares, go_share)} (attributed + harmless = {shares['attributed'] + shares['harmless']:.2f}, go if >= {go_share})")
+        print(
+            f"  -> {decide(shares, go_share)} (attributed + harmless = {shares['attributed'] + shares['harmless']:.2f}, go if >= {go_share})"
+        )
         for side in cfg["tasks"]:
             side_rows = [r for r in rows if r["side_task"] == side]
             if side_rows:
                 print_buckets(f"    {side}", side_rows)
 
-    hand = load_hand_labels([out_dir / "hand_labels.csv", out_dir / "hand_labels_rest.csv"])
+    hand = load_hand_labels(
+        [out_dir / "hand_labels.csv", out_dir / "hand_labels_rest.csv"]
+    )
     invalid = {mid: label for mid, label in hand.items() if label not in JUDGE_BUCKETS}
     if invalid:
-        raise SystemExit(f"invalid hand labels (expected one of {JUDGE_BUCKETS}): {invalid}")
+        raise SystemExit(
+            f"invalid hand labels (expected one of {JUDGE_BUCKETS}): {invalid}"
+        )
     judge_by_id = {r["miss_id"]: r["bucket"] for r in judged}
     missing = [mid for mid in hand if mid not in judge_by_id]
     if missing:
         raise SystemExit(f"hand-labelled items not judged yet: {missing}")
     if not hand:
-        print("\nno hand labels filled in yet; run export-hand (and optionally export-rest) and label")
+        print(
+            "\nno hand labels filled in yet; run export-hand (and optionally export-rest) and label"
+        )
         return
-    accuracy, confusion = agreement([(label, judge_by_id[mid]) for mid, label in hand.items()])
+    accuracy, confusion = agreement(
+        [(label, judge_by_id[mid]) for mid, label in hand.items()]
+    )
     min_agreement = cfg["thresholds"]["min_agreement"]
     verdict = "PASS" if accuracy >= min_agreement else "FAIL"
-    print(f"\n== Judge vs hand: {accuracy:.2f} agreement on {len(hand)} items ({verdict}, need >= {min_agreement})")
+    print(
+        f"\n== Judge vs hand: {accuracy:.2f} agreement on {len(hand)} items ({verdict}, need >= {min_agreement})"
+    )
     labels = list(JUDGE_BUCKETS) + [UNPARSED]
     print("hand / judge".ljust(16) + "".join(f"{b:>15s}" for b in labels))
     for h in JUDGE_BUCKETS:
@@ -377,6 +543,8 @@ def cmd_report(cfg: dict[str, Any], out_dir: Path) -> None:
 COMMANDS = {
     "sample": cmd_sample,
     "judge": cmd_judge,
+    "export-requests": cmd_export_requests,
+    "import-responses": cmd_import_responses,
     "export-hand": cmd_export_hand,
     "export-rest": cmd_export_rest,
     "report": cmd_report,
@@ -384,7 +552,9 @@ COMMANDS = {
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("command", choices=COMMANDS)
     parser.add_argument("--config", default="analysis/configs/miss_triage.yaml")
     parser.add_argument("--out-dir", help="overrides out_dir from the config")

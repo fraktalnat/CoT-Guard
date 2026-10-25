@@ -11,7 +11,7 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import NormalDist
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from analysis.miss_triage import (
     UNPARSED,
@@ -46,6 +46,7 @@ class Tally:
 
 ProblemCounts = dict[Variant, Tally]
 Statistic = Callable[[list[ProblemCounts]], float]
+T = TypeVar("T")
 
 
 def sample_of(task_id: str) -> int:
@@ -164,7 +165,7 @@ def percentile(sorted_values: list[float], q: float) -> float:
 
 
 def bootstrap_values(
-    problems: list[ProblemCounts], statistic: Statistic, n_resamples: int, seed: int
+    problems: list[T], statistic: Callable[[list[T]], float], n_resamples: int, seed: int
 ) -> list[float]:
     """Sorted `statistic` over resamples that draw problems with replacement. A problem drawn twice
     is simply two list entries, so it counts twice in both deltas."""
